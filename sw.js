@@ -1,5 +1,5 @@
 /* 合格道 GitHub Pages PWA: one HTML file + icons, fully offline. */
-const CACHE = 'kodo-github-v1';
+const CACHE = 'kodo-github-v2';
 const ASSETS = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', (event) => {
