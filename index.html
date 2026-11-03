@@ -1482,18 +1482,47 @@ window.JLPT_GRAMMAR={"points":[{"id":"n5-wa-ga","lv":5,"cat":"助词基础","tit
   // ---------- audio ----------
   let voices = [];
   let currentAudio = null;
+  function liveJaVoices() {
+    if (!('speechSynthesis' in window)) return [];
+    return speechSynthesis.getVoices().filter((v) => /^ja/i.test(v.lang));
+  }
   function refreshVoices() {
-    if (!('speechSynthesis' in window)) return;
-    voices = speechSynthesis.getVoices().filter((v) => /^ja/i.test(v.lang));
+    voices = liveJaVoices();
+    updateVoiceStatus();
+  }
+  function updateVoiceStatus() {
+    const el = $('#voice-status');
+    if (!el) return;
+    if (!('speechSynthesis' in window)) {
+      el.textContent = '当前浏览器不支持语音合成。';
+      return;
+    }
+    const all = speechSynthesis.getVoices();
+    const ja = all.filter((v) => /^ja/i.test(v.lang));
+    if (ja.length) {
+      el.innerHTML = `已找到 <b>${ja.length}</b> 个日语语音：${ja.map((v) => esc(v.name)).join('、')}`;
+    } else if (all.length === 0) {
+      el.textContent = '还没有读到系统语音列表。请先点“重新检测”；仍然为空时，安装日语语音包后再试。';
+    } else {
+      el.innerHTML = '未找到日语语音。当前会避免用中文语音硬读；请安装 Google 文字转语音的<b>日语离线语音包</b>，再点“重新检测”。';
+    }
   }
   function speak(text, slow = false) {
     if (!('speechSynthesis' in window)) { toast('当前浏览器不支持语音合成', 'bad'); return; }
+    const all = speechSynthesis.getVoices();
+    const ja = all.filter((v) => /^ja/i.test(v.lang));
+    // Do not let a Chinese system voice read Japanese kanji one character at a time.
+    if (!ja.length && all.length > 0) {
+      updateVoiceStatus();
+      toast('未检测到日语语音：请安装日语 TTS 语音包，否则会用中文读音硬读', 'bad');
+      return;
+    }
     speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(text);
     u.lang = 'ja-JP';
     u.rate = slow ? 0.65 : (S.settings.ttsRate || 0.95);
-    const preferred = voices.find((v) => /Nanami|Keita|Kyoko|Google|Microsoft|Japan/i.test(v.name));
-    if (preferred || voices[0]) u.voice = preferred || voices[0];
+    const preferred = ja.find((v) => /Nanami|Keita|Kyoko|Google|Microsoft|Japan/i.test(v.name));
+    if (preferred || ja[0]) u.voice = preferred || ja[0];
     speechSynthesis.speak(u);
   }
   function nativeUrl(file) {
@@ -2944,6 +2973,38 @@ window.JLPT_GRAMMAR={"points":[{"id":"n5-wa-ga","lv":5,"cat":"助词基础","tit
   }
 
   // ---------- settings ----------
+  async function updateOfflineStatus() {
+    const el = $('#offline-status');
+    if (!el) return;
+    const base = (location.origin || '') + (location.pathname || '/').replace(/[^/]*$/, '');
+    let cached = false;
+    try { cached = !!(await caches.match(base + 'index.html')); } catch (e) { /* ignore */ }
+    const controlled = typeof navigator !== 'undefined' && 'serviceWorker' in navigator && !!navigator.serviceWorker.controller;
+    const online = typeof navigator === 'undefined' || navigator.onLine;
+    const bits = [];
+    bits.push(online ? '当前在线' : '当前离线');
+    bits.push(controlled ? 'App 缓存已接管' : '缓存未接管（刷新一次网页）');
+    bits.push(cached ? 'index.html 已缓存' : 'index.html 未缓存');
+    el.textContent = bits.join(' · ');
+    el.style.color = cached && controlled ? 'var(--good)' : 'var(--muted)';
+  }
+
+  async function prepareOffline() {
+    if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) {
+      toast('当前浏览器不支持 Service Worker，无法准备离线缓存', 'bad');
+      return;
+    }
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      if (!reg.active) { toast('缓存还没有准备好，请刷新页面后再试', 'bad'); return; }
+      reg.active.postMessage({ type: 'CACHE_ALL' });
+      toast('正在准备离线缓存，请稍等…');
+      setTimeout(updateOfflineStatus, 2500);
+    } catch (e) {
+      toast('准备离线缓存失败，请联网刷新后重试', 'bad');
+    }
+  }
+
   function renderSettings() {
     const s = S.settings;
     return `
@@ -2997,6 +3058,13 @@ window.JLPT_GRAMMAR={"points":[{"id":"n5-wa-ga","lv":5,"cat":"助词基础","tit
             <button class="btn btn-sm" id="test-tts">${ICON.volume} 试听</button>
             <button class="btn btn-sm btn-ghost" id="test-tts-slow">慢速试听</button>
           </div>
+          <div class="field" style="margin-top:14px"><label>发音诊断</label>
+            <div class="field-hint" id="voice-status">检测中…</div>
+            <div class="settings-actions" style="margin-top:8px">
+              <button class="btn btn-sm" id="voice-check">重新检测</button>
+            </div>
+            <span class="field-hint">安卓安装日语离线语音：设置 → 系统 → 语言和输入法 → 文字转语音输出 → Google 文字转语音 → 安装语音数据 → 日语。没有日语语音时，新版会停止用中文语音硬读，而不是逐字乱读。</span>
+          </div>
         </div>
 
         <div class="card settings-card">
@@ -3008,6 +3076,14 @@ window.JLPT_GRAMMAR={"points":[{"id":"n5-wa-ga","lv":5,"cat":"助词基础","tit
           </div>
           <div class="field"><label>当前进度</label>
             <span class="field-hint">已学 ${Object.keys(S.cards).length} 个词 · 已掌握 ${masteredCount('all')} 个 · 累计作答 ${S.stats.total || 0} 次</span>
+          </div>
+          <div class="field"><label>离线缓存</label>
+            <div class="field-hint" id="offline-status">检查中…</div>
+            <div class="settings-actions" style="margin-top:8px">
+              <button class="btn btn-sm" id="prepare-offline">准备离线缓存</button>
+              <button class="btn btn-sm btn-ghost" id="check-offline">重新检查</button>
+            </div>
+            <span class="field-hint">第一次联网打开后会自动缓存；如果断网后 App 打不开，先联网点“准备离线缓存”，等提示成功再断网。</span>
           </div>
           <div class="field"><label>数据管理</label>
             <div class="settings-actions">
@@ -3082,6 +3158,11 @@ window.JLPT_GRAMMAR={"points":[{"id":"n5-wa-ga","lv":5,"cat":"助词基础","tit
     });
     $('#test-tts')?.addEventListener('click', () => speak('日本語の勉強、一緒に頑張りましょう。'));
     $('#test-tts-slow')?.addEventListener('click', () => speak('日本語の勉強、一緒に頑張りましょう。', true));
+    $('#voice-check')?.addEventListener('click', () => { refreshVoices(); updateVoiceStatus(); toast('已重新检测语音'); });
+    $('#prepare-offline')?.addEventListener('click', prepareOffline);
+    $('#check-offline')?.addEventListener('click', updateOfflineStatus);
+    updateVoiceStatus();
+    updateOfflineStatus();
     $('#export-data')?.addEventListener('click', exportData);
     $('#import-data')?.addEventListener('click', () => $('#import-file')?.click());
     $('#import-file')?.addEventListener('change', importData);
@@ -3142,6 +3223,18 @@ window.JLPT_GRAMMAR={"points":[{"id":"n5-wa-ga","lv":5,"cat":"助词基础","tit
       deferredInstallPrompt = null;
       toast('已安装到手机桌面');
     });
+    if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+      navigator.serviceWorker.addEventListener('message', (e) => {
+        if (e.data && e.data.type === 'CACHE_DONE') {
+          toast('离线缓存已准备好，可以断网使用');
+          updateOfflineStatus();
+        } else if (e.data && e.data.type === 'CACHE_FAIL') {
+          toast('离线缓存准备失败，请联网刷新后重试', 'bad');
+        }
+      });
+    }
+    window.addEventListener('online', updateOfflineStatus);
+    window.addEventListener('offline', updateOfflineStatus);
     if ('speechSynthesis' in window) speechSynthesis.onvoiceschanged = refreshVoices;
     if (window.matchMedia) {
       const mq = window.matchMedia('(prefers-color-scheme: dark)');
